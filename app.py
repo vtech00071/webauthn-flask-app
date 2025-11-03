@@ -14,10 +14,11 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_webauthn_secret_key_12345'
 
 # --- WebAuthn Server Configuration ---
-RP_ID = 'localhost'
+# RP_ID is the domain ONLY, no "https://"
+RP_ID = 'webauthn-flask-app.onrender.com'
 RP_NAME = 'My Fingerprint App'
-EXPECTED_ORIGIN = 'http://localhost:8090'
-
+# EXPECTED_ORIGIN is the full URL with "https://"
+EXPECTED_ORIGIN = 'https://webauthn-flask-app.onrender.com'
 # --- In-Memory Database ---
 db = {
     "users": {},  # Stores user info by username
