@@ -14,11 +14,10 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_webauthn_secret_key_12345'
 
 # --- WebAuthn Server Configuration ---
-# RP_ID is the domain ONLY, no "https://"
 RP_ID = 'webauthn-flask-app.onrender.com'
 RP_NAME = 'My Fingerprint App'
-# EXPECTED_ORIGIN is the full URL with "https://"
 EXPECTED_ORIGIN = 'https://webauthn-flask-app.onrender.com'
+
 # --- In-Memory Database ---
 db = {
     "users": {},  # Stores user info by username
@@ -132,7 +131,7 @@ def register_complete():
 def login_begin():
     """
     Starts the login process.
-    Finds the user's credentials and sends a new challenge.
+    Finds the's credentials and sends a new challenge.
     """
     data = request.json
     username = data.get('username')
@@ -149,18 +148,15 @@ def login_begin():
     if not saved_credentials:
         return jsonify({"error": "No credentials found for this user. Please register first."}), 404
 
-    # --- THIS IS THE FIX ---
-    # We must transform our saved VerifiedRegistration objects
-    # into PublicKeyCredentialDescriptor objects.
+    # Transform our saved credentials into the format the library needs
     descriptors = []
     for cred in saved_credentials:
         descriptors.append(
             webauthn_structs.PublicKeyCredentialDescriptor(
-                id=cred.credential_id,  # The correct attribute is .credential_id
+                id=cred.credential_id,
                 type=webauthn_structs.PublicKeyCredentialType.PUBLIC_KEY
             )
         )
-    # --- END FIX ---
 
     options = webauthn.generate_authentication_options(
         rp_id=RP_ID,
@@ -182,7 +178,7 @@ def login_complete():
     Completes the login process.
     Verifies the login challenge response.
     """
-    data = request.json
+    data = request.json # This is the assertionForServer from main.js
     challenge = session.get('challenge')
     user_id_b64 = session.get('login_user_id')
 
@@ -193,17 +189,31 @@ def login_complete():
     user_credentials = db['credentials'].get(user_id, [])
 
     try:
-        credential = parse_authentication_credential_json(data)
-        
-        # Find the specific credential used for this login
+        # --- THIS IS THE FIX ---
+        # Get the rawId (as a Base64-URL string) from the login data
+        raw_id_from_login = data.get('rawId')
+        if not raw_id_from_login:
+            return jsonify({"error": "Login data was missing rawId"}), 400
+            
+        # Find the matching credential from our database
         matching_cred = None
         for cred in user_credentials:
-            if cred.credential_id == credential.id:
+            # Convert the *saved* credential ID (bytes) into a Base64-URL string
+            saved_id_b64 = base64.b64encode(cred.credential_id).decode('utf-8') \
+                .replace('+', '-').replace('/', '_').rstrip('=')
+            
+            # Now we compare string to string. This is 100% reliable.
+            if saved_id_b64 == raw_id_from_login:
                 matching_cred = cred
                 break
         
         if not matching_cred:
+            # This is the error you are seeing.
             return jsonify({"error": "Credential not recognized."}), 400
+        # --- END FIX ---
+
+        # Now that we have the matching_cred, we can proceed
+        credential = parse_authentication_credential_json(data)
 
         # Verify the login
         verification = webauthn.verify_authentication_response(
