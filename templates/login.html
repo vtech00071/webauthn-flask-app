@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale-1.0">
+    <title>Login (WebAuthn)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <main class="main-content">
+        <div class="verification-container">
+            <h1>Login</h1>
+            <p>Enter your username and press "Login" to use your fingerprint.</p>
+
+            <div id="message-area" class="message-box"></div>
+
+            <div class="form-group" style="grid-column: 1 / -1;">
+                <label for="username" style="display: block; text-align: left; margin-bottom: 5px; font-weight: 500;">Username:</label>
+                <input type="text" id="username" name="username" placeholder="Enter your username" required style="width: 100%; padding: 0.8rem; border: 1px solid #ccc; border-radius: 8px;">
+            </div>
+
+            <button id="login-button" class="btn btn-primary" style="width: 100%;">
+                <i class="fas fa-fingerprint"></i> Login with Fingerprint
+            </button>
+            
+            <a href="{{ url_for('register') }}" style="display: block; margin-top: 1rem;">Don't have an account? Register.</a>
+        </div>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
