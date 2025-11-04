@@ -3,6 +3,7 @@ import webauthn
 import webauthn.helpers.structs as webauthn_structs
 import os
 import base64
+import json # We need this to handle the face descriptor list
 from webauthn.helpers import (
     options_to_json, 
     parse_registration_credential_json, 
@@ -19,6 +20,7 @@ RP_NAME = 'My Fingerprint App'
 EXPECTED_ORIGIN = 'https://webauthn-flask-app.onrender.com'
 
 # --- In-Memory Database ---
+# We've added 'face_descriptor': None to our user model
 db = {
     "users": {},  # Stores user info by username
     "credentials": {}  # Stores credentials by user_id
@@ -47,7 +49,7 @@ def success():
         
     return render_template('success.html')
 
-# === 1. REGISTRATION LOGIC ===
+# === 1. FINGERPRINT (WebAuthn) REGISTRATION ===
 
 @app.route('/register-begin', methods=['POST'])
 def register_begin():
@@ -61,9 +63,11 @@ def register_begin():
         return jsonify({"error": "User already exists"}), 400
 
     user_id = os.urandom(32)
+    # Add the new 'face_descriptor' field
     db['users'][username] = {
         "id": user_id,
-        "username": username
+        "username": username,
+        "face_descriptor": None # New field for face AI
     }
     
     session['registration_user_id'] = base64.b64encode(user_id).decode('utf-8')
@@ -86,10 +90,6 @@ def register_begin():
 
 @app.route('/register-complete', methods=['POST'])
 def register_complete():
-    """
-    Completes the registration process.
-    Verifies the challenge response from the browser/phone.
-    """
     data = request.json
     challenge = session.get('challenge')
     user_id_b64 = session.get('registration_user_id')
@@ -103,7 +103,7 @@ def register_complete():
         credential = parse_registration_credential_json(data)
         
         registration_verification = webauthn.verify_registration_response(
-            credential=credential, # Pass the parsed object
+            credential=credential,
             expected_challenge=challenge,
             expected_origin=EXPECTED_ORIGIN,
             expected_rp_id=RP_ID,
@@ -111,13 +111,11 @@ def register_complete():
     except Exception as e:
         return jsonify({"error": f"Registration failed: {e}"}), 400
 
-    # Save the new, verified credential to our "database"
     if user_id not in db['credentials']:
         db['credentials'][user_id] = []
         
     db['credentials'][user_id].append(registration_verification)
     
-    # Clear session and return success
     session.pop('registration_user_id', None)
     session.pop('registration_username', None)
     session.pop('challenge', None)
@@ -125,14 +123,10 @@ def register_complete():
     return jsonify({"success": True, "message": "Registration successful!"})
 
 
-# === 2. LOGIN LOGIC ===
+# === 2. FINGERPRINT (WebAuthn) LOGIN ===
 
 @app.route('/login-begin', methods=['POST'])
 def login_begin():
-    """
-    Starts the login process.
-    Finds the user's credentials and sends a new challenge.
-    """
     data = request.json
     username = data.get('username')
 
@@ -148,7 +142,6 @@ def login_begin():
     if not saved_credentials:
         return jsonify({"error": "No credentials found for this user. Please register first."}), 404
 
-    # Transform our saved credentials into the format the library needs
     descriptors = []
     for cred in saved_credentials:
         descriptors.append(
@@ -160,7 +153,7 @@ def login_begin():
 
     options = webauthn.generate_authentication_options(
         rp_id=RP_ID,
-        allow_credentials=descriptors, # Pass the new, correctly-formatted list
+        allow_credentials=descriptors,
     )
 
     session['challenge'] = options.challenge
@@ -174,11 +167,7 @@ def login_begin():
 
 @app.route('/login-complete', methods=['POST'])
 def login_complete():
-    """
-    Completes the login process.
-    Verifies the login challenge response.
-    """
-    data = request.json # This is the assertionForServer from main.js
+    data = request.json
     challenge = session.get('challenge')
     user_id_b64 = session.get('login_user_id')
 
@@ -189,18 +178,14 @@ def login_complete():
     user_credentials = db['credentials'].get(user_id, [])
 
     try:
-        # Get the rawId (as a Base64-URL string) from the login data
         raw_id_from_login = data.get('rawId')
         if not raw_id_from_login:
             return jsonify({"error": "Login data was missing rawId"}), 400
             
-        # Find the matching credential from our database
         matching_cred = None
         for cred in user_credentials:
-            # Use the built-in, correct URL-safe encoder
             saved_id_b64 = base64.urlsafe_b64encode(cred.credential_id).decode('utf-8').rstrip('=')
             
-            # Now we compare string to string. This is 100% reliable.
             if saved_id_b64 == raw_id_from_login:
                 matching_cred = cred
                 break
@@ -208,28 +193,22 @@ def login_complete():
         if not matching_cred:
             return jsonify({"error": "Credential not recognized."}), 400
 
-        # Now that we have the matching_cred, we can proceed
         credential = parse_authentication_credential_json(data)
 
-        # Verify the login
         verification = webauthn.verify_authentication_response(
-            credential=credential, # Pass the parsed object
+            credential=credential,
             expected_challenge=challenge,
             expected_origin=EXPECTED_ORIGIN,
             expected_rp_id=RP_ID,
-            # --- THIS IS THE FIX ---
-            # The correct attribute is 'credential_public_key'
             credential_public_key=matching_cred.credential_public_key,
             credential_current_sign_count=matching_cred.sign_count,
         )
         
-        # Update the signature count to prevent replay attacks
         matching_cred.sign_count = verification.new_sign_count
 
     except Exception as e:
         return jsonify({"error": f"Login failed: {e}"}), 400
 
-    # Clear session and mark user as "logged in"
     session.pop('login_user_id', None)
     session.pop('challenge', None)
     session['logged_in'] = True
@@ -237,7 +216,84 @@ def login_complete():
     return jsonify({"success": True, "message": "Login successful!"})
 
 
+# === 3. FACE AI REGISTRATION & LOGIN (NEW) ===
+
+@app.route('/register-face')
+def register_face():
+    """Serves the new 'register_face.html' page."""
+    return render_template('register_face.html')
+
+
+@app.route('/login-face')
+def login_face():
+    """Serves the new 'login_face.html' page."""
+    return render_template('login_face.html')
+
+
+@app.route('/save-face-descriptor', methods=['POST'])
+def save_face_descriptor():
+    """
+    Saves the user's AI face signature (descriptor) to the database.
+    NOTE: This assumes the user *already* has an account from fingerprint registration.
+    """
+    data = request.json
+    username = data.get('username')
+    descriptor = data.get('descriptor') # This will be a list of 128 numbers
+
+    if not username or not descriptor:
+        return jsonify({"error": "Username and descriptor are required"}), 400
+
+    user = db['users'].get(username)
+    if not user:
+        return jsonify({"error": "User not found. Please register with fingerprint first."}), 404
+
+    # Save the descriptor (as a JSON string)
+    try:
+        db['users'][username]['face_descriptor'] = json.dumps(descriptor)
+        return jsonify({"success": True, "message": "Face registered successfully!"})
+    except Exception as e:
+        return jsonify({"error": f"Could not save face data: {e}"}), 500
+
+
+@app.route('/get-face-descriptor', methods=['POST'])
+def get_face_descriptor():
+    """
+    Retrieves a user's saved face descriptor for comparison.
+    """
+    data = request.json
+    username = data.get('username')
+
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+
+    user = db['users'].get(username)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    face_descriptor_str = user.get('face_descriptor')
+    if not face_descriptor_str:
+        return jsonify({"error": "No face descriptor registered for this user."}), 404
+
+    # Send the saved descriptor (still a JSON string) back to the browser
+    return jsonify({
+        "success": True,
+        "descriptor": json.loads(face_descriptor_str) # Convert back to a list
+    })
+
 # === Run the Application ===
+
+
+
+
+@app.route('/login-complete-face-dummy')
+def login_complete_face_dummy():
+    """
+    A simple dummy route for the face AI to call.
+    This sets the session to 'logged_in' = True.
+    """
+    session['logged_in'] = True
+    return jsonify({"success": True})
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=8090)
