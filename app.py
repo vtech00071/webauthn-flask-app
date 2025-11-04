@@ -189,15 +189,10 @@ def login_complete():
     user_credentials = db['credentials'].get(user_id, [])
 
     try:
-        # --- THIS IS THE FIX ---
-        
         # Get the rawId (as a Base64-URL string) from the login data
         raw_id_from_login = data.get('rawId')
         if not raw_id_from_login:
             return jsonify({"error": "Login data was missing rawId"}), 400
-            
-        # Add print statement for debugging
-        print(f"--- DEBUG: Trying to log in with rawId: {raw_id_from_login}")
             
         # Find the matching credential from our database
         matching_cred = None
@@ -205,21 +200,13 @@ def login_complete():
             # Use the built-in, correct URL-safe encoder
             saved_id_b64 = base64.urlsafe_b64encode(cred.credential_id).decode('utf-8').rstrip('=')
             
-            # Add print statement for debugging
-            print(f"--- DEBUG: Comparing against saved rawId: {saved_id_b64}")
-            
             # Now we compare string to string. This is 100% reliable.
             if saved_id_b64 == raw_id_from_login:
                 matching_cred = cred
                 break
         
         if not matching_cred:
-            # This is the error you are seeing.
-            print("--- DEBUG: No matching credential was found.")
             return jsonify({"error": "Credential not recognized."}), 400
-        
-        print("--- DEBUG: Found a matching credential!")
-        # --- END FIX ---
 
         # Now that we have the matching_cred, we can proceed
         credential = parse_authentication_credential_json(data)
@@ -230,7 +217,9 @@ def login_complete():
             expected_challenge=challenge,
             expected_origin=EXPECTED_ORIGIN,
             expected_rp_id=RP_ID,
-            credential_public_key=matching_cred.public_key,
+            # --- THIS IS THE FIX ---
+            # The correct attribute is 'credential_public_key'
+            credential_public_key=matching_cred.credential_public_key,
             credential_current_sign_count=matching_cred.sign_count,
         )
         
@@ -238,7 +227,6 @@ def login_complete():
         matching_cred.sign_count = verification.new_sign_count
 
     except Exception as e:
-        print(f"--- DEBUG: An error occurred during verification: {e}")
         return jsonify({"error": f"Login failed: {e}"}), 400
 
     # Clear session and mark user as "logged in"
